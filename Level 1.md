@@ -82,4 +82,4 @@ If an S3 bucket is unintentionally exposed, an attacker may be able to enumerate
 ## 🔗 References
 
 * [flaws.cloud](http://flaws.cloud/)
-* [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html?utm_source=chatgpt.com)
+* [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html?)
