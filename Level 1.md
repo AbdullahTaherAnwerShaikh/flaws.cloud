@@ -73,11 +73,9 @@ If an S3 bucket is unintentionally exposed, an attacker may be able to enumerate
 
 ### How it could be prevented
 
-* Apply least-privilege permissions
-* Remove unnecessary public access
-* Review bucket policies
-* Enable appropriate logging/monitoring
-* Avoid storing secrets in publicly accessible locations
+* AWS specifically recommends that a public S3 static website grant anonymous users s3:GetObject, but not bucket-listing (s3:ListBucket) or write permissions.
+* Don't grant s3:ListBucket to the public.
+* Use S3 Block Public Access where possible.
 
 ---
 
