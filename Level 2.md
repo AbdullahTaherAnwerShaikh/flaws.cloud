@@ -36,35 +36,32 @@ Using authenticated access we can view the list without our account being associ
 
 ```bash
 # Command used
-nsloopup flaws.cloud
+aws s3 --profile YOUR_ACCOUNT ls s3://level2-c8b217a33fcf1f839f6f1f73a00a9ae7.flaws.cloud
 ```
-
+this command lists the objects inside the bucket.
 
 
 
 ## 🏁 Solution
 
-http://flaws.cloud.s3-website-us-west-2.amazonaws.com/ 
-http://flaws.cloud.s3.amazonaws.com
-The two URLs are different S3 endpoints that talk to the same bucket in different ways.
-The GET request to the website endpoint returns the index document that is specified in the website configuration.
-Whereas as the Get request at the REST API endpoint returns the list of the object keys in the bucket.
+AWS explicitly defines an S3 Authenticated Users group. It means all AWS accounts, not just the bucket owner's account. But the request must be authenticated/signed with AWS credentials.
+Your AWS account does not need to own the bucket or be specifically listed by account ID. That's the whole point of the AuthenticatedUsers group. AWS's documentation says that granting this group access allows any AWS account to access the resource, provided requests are authenticated.
 
 ## 🛡️ Security Lesson
 
 ### Vulnerability / Misconfiguration
 
-S3 static website URL can be altered to allow us to access through REST API which allows us to view the list of object keys in the bucket and can access these objects using the URL.
+Misconfiguring the AuthenticatedUsers allows any user to access publicly readable data, unintentionally storing sensitive data will jeopardize your files.
 
 
 ### Why it matters
 
-If an S3 bucket is unintentionally exposed, an attacker may be able to enumerate or retrieve sensitive objects without authentication.
+If an S3 bucket is unintentionally misconfigured, an attacker may be able to enumerate or retrieve sensitive objects with authentication.
 
 ### How it could be prevented
 
 * AWS specifically recommends that a public S3 static website grant anonymous users s3:GetObject, but not bucket-listing (s3:ListBucket) or write permissions.
-* Don't grant s3:ListBucket to the public.
+* Don't grant s3:ListBucket to the AuthenticatedUsers.
 * Use S3 Block Public Access where possible.
 
 ---
@@ -72,4 +69,4 @@ If an S3 bucket is unintentionally exposed, an attacker may be able to enumerate
 ## 🔗 References
 
 * [flaws.cloud](http://flaws.cloud/)
-* [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html?utm_source=chatgpt.com)
+* [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide)
