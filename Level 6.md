@@ -1,22 +1,22 @@
-# Level 6 — IAM Permissions & S3 Enumeration
+# Level 6 — IAM Policy and API Gateway
 
 ## 🎯 Objective
 
-> This level wants us to find the hidden directory in the Level 6 S3 bucket.
+> This level gives us AWS credentials for an IAM user with the `SecurityAudit` policy attached. We need to see what else this user can access and find the final level.
 
-The main goal is to use the temporary AWS credentials obtained from the previous level to interact with the Level 6 S3 bucket and discover the hidden directory.
+The main goal is to inspect the permissions of the provided IAM user and discover an additional policy that gives us access to an API Gateway endpoint.
 
 ---
 
 ## 🧠 What I Learned
 
-* AWS IAM roles can provide temporary credentials to applications and EC2 instances.
-* Temporary credentials can be used with the AWS CLI just like other AWS credentials, but they also require a session token.
-* An IAM identity can have permissions to access AWS resources without being an IAM user.
-* S3 bucket names and object paths can sometimes reveal useful information during enumeration.
-* Having valid AWS credentials does not automatically mean that you have permission to access everything in an AWS account.
-* `aws sts get-caller-identity` can be used to determine which AWS identity is currently being used.
-* S3 prefixes can behave like directories even though S3 fundamentally stores objects in a flat namespace.
+* The `SecurityAudit` policy gives an IAM user read-only access to a large amount of AWS configuration information.
+* Read-only permissions can still be dangerous because they can reveal information about the AWS environment.
+* IAM users can have multiple policies attached to them.
+* IAM policies contain the actual permissions granted to an identity.
+* API Gateway can be used to expose and invoke APIs.
+* API Gateway can trigger Lambda functions.
+* AWS resources can be connected together, so enumerating one service can lead to another service.
 
 ---
 
@@ -24,217 +24,276 @@ The main goal is to use the temporary AWS credentials obtained from the previous
 
 ### Finding 1
 
-From Level 5, we obtained temporary AWS credentials from the EC2 Instance Metadata Service.
+The Level 6 website provides us with an **Access Key ID** and **Secret Access Key**.
 
-These credentials belonged to the IAM role attached to the EC2 instance.
-
-Instead of using our original IAM user, we can use these temporary credentials to interact with AWS as the `flaws` role.
+We can use these credentials to create an AWS CLI profile and investigate what permissions this user has.
 
 ### Finding 2
 
-The Level 6 bucket is:
+The user has the `SecurityAudit` policy attached to it.
+
+The `SecurityAudit` policy is intended for security auditing and gives the user permissions to view security configuration information.
+
+However, there is another policy attached to the user called:
 
 ```text
-level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud
+list_apigateways
 ```
 
-The objective is to enumerate the bucket and find the hidden directory.
+This policy gives us additional permissions that are not part of the normal `SecurityAudit` policy.
+
+This is the important finding that allows us to continue.
 
 ---
 
 ## 💥 Exploitation
 
-### Step 1 — Verify our AWS identity
+### Step 1 — Configure the credentials
 
-Before interacting with the bucket, we can verify which AWS identity our profile is using.
+The Level 6 page gives us an Access Key ID and Secret Access Key.
+
+We can create a new AWS CLI profile using:
 
 ```bash
-aws sts get-caller-identity --profile level5
+aws configure --profile level6
 ```
 
-The command uses **AWS STS (Security Token Service)** to return information about the identity associated with the credentials.
+This allows us to enter the credentials and keep them separate from our other AWS profiles.
 
-The response contains information such as:
-
-```text
-Account
-Arn
-UserId
-```
-
-The `Arn` allows us to identify the IAM role being used.
-
-This is useful because it confirms that the AWS CLI is actually using the temporary credentials obtained from Level 5.
+We can then use `--profile level6` whenever we want to use these credentials.
 
 ---
 
-### Step 2 — List the Level 6 bucket
-
-We can now attempt to list the contents of the Level 6 S3 bucket.
+### Step 2 — Verify the credentials
 
 ```bash
-aws s3 ls s3://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud --profile level5
+aws sts get-caller-identity --profile level6
 ```
 
-### Breaking down the command
+`sts get-caller-identity` tells us which AWS identity the credentials belong to.
 
-```text
-aws
-```
+The result shows that we are using the `Level6` IAM user.
 
-Runs the AWS CLI.
-
-```text
-s3
-```
-
-Selects the S3 service.
-
-```text
-ls
-```
-
-Lists buckets or objects.
-
-```text
-s3://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud
-```
-
-Specifies the S3 bucket we want to inspect.
-
-```text
---profile level5
-```
-
-Tells the AWS CLI to use the credentials stored in the `level5` profile instead of the default profile.
-
-The result reveals an unexpected directory/prefix.
+This is basically the AWS equivalent of checking **whoami**.
 
 ---
 
-### Step 3 — Inspect the discovered directory
-
-Suppose the listing reveals:
-
-```text
-ddcc78ff/
-```
-
-We can enumerate that prefix by adding it to the S3 path:
+### Step 3 — Find the policies attached to the user
 
 ```bash
-aws s3 ls s3://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud/ddcc78ff/ --profile level5
+aws iam list-attached-user-policies --user-name Level6 --profile level6
 ```
 
-The trailing `/` is important because it tells S3 that we are interested in objects under that prefix.
+This command lists the IAM policies directly attached to the `Level6` user.
 
-The command allows us to inspect what exists inside the discovered directory.
+The result shows two policies:
+
+```text
+MySecurityAudit
+list_apigateways
+```
+
+`MySecurityAudit` is the auditing policy we expected.
+
+The interesting one is:
+
+```text
+list_apigateways
+```
+
+This tells us that the user has additional permissions specifically related to API Gateway.
 
 ---
 
-### Step 4 — Access the discovered resource
+### Step 4 — Inspect the `list_apigateways` policy
 
-We can also use the S3 URL directly:
+First, we need to get information about the policy:
 
-```text
-http://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud/ddcc78ff/
+```bash
+aws iam get-policy \
+    --policy-arn arn:aws:iam::975426262029:policy/list_apigateways \
+    --profile level6
 ```
 
-This allows us to access the hidden directory through the Level 6 website.
+This command gives us information about the policy.
+
+The important part is:
+
+```text
+DefaultVersionId: v4
+```
+
+The policy version tells us which version contains the permissions currently being used.
 
 ---
 
-## 🏁 Solution
+### Step 5 — Read the actual permissions
 
-The Level 6 solution follows directly from the previous level.
-
-In Level 5, we exploited an SSRF vulnerability to access the EC2 Instance Metadata Service and retrieve temporary credentials belonging to the `flaws` IAM role.
-
-We then used those credentials with the AWS CLI.
-
-First, we verified the identity:
+Now that we know the policy version is `v4`, we can retrieve the actual policy document:
 
 ```bash
-aws sts get-caller-identity --profile level5
+aws iam get-policy-version \
+    --policy-arn arn:aws:iam::975426262029:policy/list_apigateways \
+    --version-id v4 \
+    --profile level6
 ```
 
-Then we enumerated the Level 6 bucket:
+This shows us what actions the policy actually allows.
 
-```bash
-aws s3 ls s3://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud --profile level5
-```
+The policy gives us permissions to enumerate API Gateway resources.
 
-The bucket revealed the hidden prefix:
-
-```text
-ddcc78ff/
-```
-
-We could then inspect it:
-
-```bash
-aws s3 ls s3://level6-cc4c404a8a8b876167f5e70a7d8c9880.flaws.cloud/ddcc78ff/ --profile level5
-```
-
-The hidden directory provides the final information required by the challenge.
+This is important because now we know that there may be an API Gateway endpoint somewhere in the AWS account.
 
 ---
+
+### Step 6 — Find the API Gateway
+
+We can list the REST APIs:
+
+```bash
+aws apigateway get-rest-apis --profile level6 --region us-west-2
+```
+
+This shows the REST APIs available to us.
+
+Among the results we find:
+
+```text
+s33ppypa75
+```
+
+This is the **REST API ID**.
+
+We can also inspect the resources belonging to the API:
+
+```bash
+aws apigateway get-resources \
+    --rest-api-id s33ppypa75 \
+    --profile level6 \
+    --region us-west-2
+```
+
+The result shows a resource called:
+
+```text
+/level6
+```
+
+So we now know that the API has a `/level6` endpoint.
+
+---
+
+### Step 7 — Find the API stage
+
+We still need the API's stage name.
+
+We can get it with:
+
+```bash
+aws apigateway get-stages \
+    --rest-api-id s33ppypa75 \
+    --profile level6 \
+    --region us-west-2
+```
+
+The result shows:
+
+```text
+Prod
+```
+
+So we now have all the information required to construct the API URL:
+
+```text
+API ID  = s33ppypa75
+Region  = us-west-2
+Stage   = Prod
+Endpoint = /level6
+```
+
+---
+
+### Step 8 — Access the API
+
+AWS API Gateway REST APIs use the following general format:
+
+```text
+https://API-ID.execute-api.REGION.amazonaws.com/STAGE/
+```
+
+Using the information we discovered, the URL becomes:
+
+```text
+https://s33ppypa75.execute-api.us-west-2.amazonaws.com/Prod/level6
+```
+
+We can access it using a browser or `curl`:
+
+```bash
+curl https://s33ppypa75.execute-api.us-west-2.amazonaws.com/Prod/level6
+```
+
+The API returns:
+
+```text
+Go to http://theend-797237e8ada164bf9f12cebf93b282cf.flaws.cloud/d730aa2b/
+```
+
+This is the final URL.
+
+---
+
 
 ## 🛡️ Security Lesson
 
 ### Vulnerability / Misconfiguration
 
-**Excessive AWS permissions combined with exposed temporary credentials**
+**Over-permissioned IAM user**
 
-The previous level demonstrated how an SSRF vulnerability could expose credentials associated with an EC2 IAM role.
+The user was supposed to have the `SecurityAudit` policy, but it also had an additional policy that provided API Gateway permissions.
 
-Once those credentials were obtained, their permissions determined what AWS resources could be accessed.
-
-This demonstrates why **least privilege** is important for IAM roles.
+This additional permission allowed us to discover resources that were not necessary for simply performing a security audit.
 
 ### Why it matters
 
-An attacker does not necessarily need an administrator account to cause damage.
+Read-only permissions can still expose useful information to an attacker.
 
-If an exposed IAM role has permission to access sensitive S3 buckets, an attacker who obtains its credentials may be able to:
+An attacker who can enumerate an AWS environment may discover:
 
-* List objects
-* Download sensitive files
-* Modify objects
-* Delete objects
-* Access other AWS resources allowed by the role
+* API Gateway endpoints
+* Lambda functions
+* IAM policies
+* AWS resources
+* Resource relationships
+* Other information that can be used to find further vulnerabilities
 
-The impact depends on the permissions attached to the compromised identity.
+This level demonstrates that **read permissions should not automatically be considered harmless**.
 
 ### How it could be prevented
 
-* Apply least-privilege permissions to IAM roles.
-* Avoid granting broad S3 permissions when they are unnecessary.
-* Protect EC2 metadata from SSRF attacks.
-* Prefer IMDSv2.
-* Protect applications against SSRF.
-* Monitor unusual AWS API activity.
-* Rotate or revoke credentials when exposure is detected.
-* Use CloudTrail to monitor API activity.
-* Regularly review IAM policies and role permissions.
+* Apply the principle of least privilege.
+* Only attach policies that are actually required.
+* Regularly review IAM policies attached to users.
+* Remove unnecessary or outdated policies.
+* Avoid giving users access to AWS resources unrelated to their role.
+* Monitor IAM policy changes.
 
 ---
 
 ## 📝 Key Takeaways
 
-* **AWS services:** IAM / S3 / STS
-* **Security concept:** IAM roles and temporary credentials
-* **Technique:** S3 enumeration
-* **Important command:** `aws sts get-caller-identity`
-* **Main lesson:** The permissions of an IAM role determine what an attacker can do if its credentials are compromised.
-* **Practical lesson:** Cloud credentials should always be treated as sensitive secrets, including temporary credentials.
+* **AWS services:** IAM / API Gateway / Lambda
+* **Security concept:** IAM permissions and enumeration
+* **Vulnerability:** Excessive permissions
+* **Important command:** `aws iam list-attached-user-policies`
+* **Main lesson:** Read-only permissions can still reveal valuable information about an AWS environment.
+* **Practical lesson:** IAM users should only receive the permissions they actually need.
 
 ---
 
 ## 🔗 References
 
 * [flaws.cloud](http://flaws.cloud/)
-* [AWS CLI Documentation](https://docs.aws.amazon.com/cli/)
-* [AWS STS Documentation](https://docs.aws.amazon.com/STS/latest/APIReference/)
 * [AWS IAM Documentation](https://docs.aws.amazon.com/iam/)
-* [Amazon S3 Documentation](https://docs.aws.amazon.com/s3/)
+* [AWS API Gateway Documentation](https://docs.aws.amazon.com/apigateway/)
+* [AWS Lambda Documentation](https://docs.aws.amazon.com/lambda/)
